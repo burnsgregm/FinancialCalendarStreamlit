@@ -55,7 +55,7 @@ if "calendar_view_start" not in st.session_state:
 if "calendar_view_end" not in st.session_state:
     st.session_state.calendar_view_end = (datetime.today().date().replace(day=1) + relativedelta(months=1, days=-1)).isoformat()
 
-# --- 4. HELPER FUNCTIONS & CALLBACKS ---
+# --- 4. HELPER FUNCTIONS ---
 
 def format_currency(value):
     """Formats a float as $USD currency."""
@@ -98,15 +98,6 @@ def format_calendar_item(row):
             "is_actual": is_actual,
         }
     }
-
-def handle_day_click(date_info):
-    """Callback for when a user clicks on a day."""
-    st.session_state.selected_day = date_info['date']
-
-def handle_nav_change(date_info):
-    """Callback for when the user changes the month."""
-    st.session_state.calendar_view_start = date_info['start']
-    st.session_state.calendar_view_end = date_info['end']
 
 # --- 5. DATA LOADING & PROJECTION ---
 # This is the core logic that runs on every interaction
@@ -176,13 +167,18 @@ cal = calendar(
 )
 
 # --- Handle Calendar Callbacks ---
+# *** THIS IS THE FIX ***
+# We split the ISO datetime string at the 'T' to get just the date
 if cal.get('callback') == 'dateClick':
-    st.session_state.selected_day = cal.get('dateClick')['date']
+    date_str = cal.get('dateClick')['date'].split('T')[0]
+    st.session_state.selected_day = date_str
     st.rerun()
 
 if cal.get('callback') == 'datesSet':
-    st.session_state.calendar_view_start = cal.get('datesSet')['start']
-    st.session_state.calendar_view_end = cal.get('datesSet')['end']
+    start_str = cal.get('datesSet')['start'].split('T')[0]
+    end_str = cal.get('datesSet')['end'].split('T')[0]
+    st.session_state.calendar_view_start = start_str
+    st.session_state.calendar_view_end = end_str
     st.rerun()
 
 
