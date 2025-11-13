@@ -5,13 +5,10 @@ This is a proof-of-concept web application for a calendar-based financial tracke
 
 The primary goal of this app is to provide a visual, at-a-glance calendar to see a projected financial balance on any given future day.
 
-
-
-## 🚀 Live Demo
-
+### Live Demo
 A live version of this app is deployed on Streamlit Community Cloud.
 
-**Note:** This is a secure, multi-user application.
+**Note: This is a secure, multi-user application.**
 1.  You will be required to **log in with a Google account**.
 2.  Your data is **100% private** to your account. You will be given a fresh, empty calendar.
 3.  Your data is ephemeral and will be reset when the app server restarts.
