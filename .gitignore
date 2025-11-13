@@ -1,0 +1,11 @@
+# Ignore the live database file
+finance_db.sqlite
+finance_db.sqlite-journal
+
+# Ignore Streamlit's credentials file
+.streamlit/config.toml
+.streamlit/secrets.toml
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
