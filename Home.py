@@ -31,7 +31,8 @@ except AttributeError:
     user_email = "local_dev_user@example.com"
 except Exception as e:
     st.error("Authentication failed. Please log in to continue.")
-    st.image("https://i.imgur.com/39SST9b.png", use_column_width=True)
+    # You can host this image on imgur or in your GitHub repo
+    # st.image("https://i.imgur.com/39SST9b.png", use_column_width=True)
     st.stop()
 
 # --- Initialize Database & User ---
@@ -53,7 +54,11 @@ if "calendar_view_start" not in st.session_state:
     st.session_state.calendar_view_start = datetime.today().date().replace(day=1).isoformat()
     
 if "calendar_view_end" not in st.session_state:
-    st.session_state.calendar_view_end = (datetime.today().date().replace(day=1) + relativedelta(months=1, days=-1)).isoformat()
+    # Calculate end of the month
+    today = datetime.today().date()
+    next_month = today.replace(day=28) + timedelta(days=4)
+    end_of_month = next_month - timedelta(days=next_month.day)
+    st.session_state.calendar_view_end = end_of_month.isoformat()
 
 # --- 4. HELPER FUNCTIONS ---
 
@@ -169,12 +174,12 @@ cal = calendar(
 # --- Handle Calendar Callbacks ---
 # *** THIS IS THE FIX ***
 # We split the ISO datetime string at the 'T' to get just the date
-if cal.get('callback') == 'dateClick':
+if cal and cal.get('callback') == 'dateClick':
     date_str = cal.get('dateClick')['date'].split('T')[0]
     st.session_state.selected_day = date_str
     st.rerun()
 
-if cal.get('callback') == 'datesSet':
+if cal and cal.get('callback') == 'datesSet':
     start_str = cal.get('datesSet')['start'].split('T')[0]
     end_str = cal.get('datesSet')['end'].split('T')[0]
     st.session_state.calendar_view_start = start_str
@@ -259,16 +264,23 @@ if "add_tx_date" in st.session_state:
         
         # Load categories for the dropdown
         categories = database.get_categories(conn, USER_ID)
-        cat_options = {c[0]: f"{c[2]} - {c[1]}" for c in categories}
+        cat_options = {c[0]: f"{c[1]} ({c[2]})" for c in categories}
+        cat_ids = list(cat_options.keys())
         
         with st.form(key="add_tx_form"):
             col1, col2 = st.columns(2)
             with col1:
                 date = st.date_input("Date", value=prefill_date)
                 description = st.text_input("Description (e.g., 'Paycheck', 'Netflix')")
-                category_id = st.selectbox("Category", 
-                                           options=cat_options.keys(), 
-                                           format_func=lambda x: cat_options.get(x, "None"))
+                try:
+                    category_id = st.selectbox("Category", 
+                                            options=cat_ids, 
+                                            format_func=lambda x: cat_options.get(x, "None"))
+                except st.errors.StreamlitAPIException:
+                     # This handles the case where the category list is empty
+                     category_id = None
+                     st.write("No categories found. Add one in the sidebar.")
+            
             with col2:
                 amount_str = st.text_input("Amount (use '-' for debits, e.g., -50.25)")
                 is_confirmed = st.checkbox("Confirmed (Actual Amount)", value=True)
@@ -291,7 +303,7 @@ if "add_tx_date" in st.session_state:
             if submitted:
                 try:
                     amount = float(amount_str)
-                except ValueError:
+                except (ValueError, TypeError):
                     st.error("Amount must be a number (e.g., 50.25 or -14.99)")
                     return
                 
