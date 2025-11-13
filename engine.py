@@ -88,13 +88,16 @@ def get_calendar_data(conn, user_id, view_start_date_str, view_end_date_str):
 
     start_balance = settings['start_balance']
     start_date_str = settings['start_date']
+    
+    # --- FIX: Use strptime for BOTH dates for safety ---
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    view_end_dt = datetime.strptime(view_end_date_str, "%Y-%m-%d").date()
+    view_start_dt = datetime.strptime(view_start_date_str, "%Y-%m-%d").date()
     
     # 1. Get ALL transactions from the user's global start date
     all_transactions = database.get_all_transactions_after(conn, user_id, start_date_str)
     
     # 2. Create a full date range for the calendar
-    view_end_dt = datetime.strptime(view_end_date_str, "%Y-%m-%d").date()
     full_date_range = pd.date_range(start=start_date, end=view_end_dt, freq='D')
     calendar_df = pd.DataFrame(index=full_date_range).reset_index().rename(columns={'index': 'date'})
     
@@ -106,8 +109,7 @@ def get_calendar_data(conn, user_id, view_start_date_str, view_end_date_str):
         calendar_df['is_actual'] = True # No transactions, so the balance is "actual"
         
         # Filter to the requested view
-        view_start_dt = pd.to_datetime(view_start_date_str)
-        final_df = calendar_df[calendar_df['date'] >= view_start_dt].copy()
+        final_df = calendar_df[calendar_df['date'] >= pd.to_datetime(view_start_dt)].copy()
         return final_df
 
     # 3. Convert transactions to DataFrame
@@ -139,10 +141,8 @@ def get_calendar_data(conn, user_id, view_start_date_str, view_end_date_str):
     calendar_df['balance'] = start_balance + calendar_df['net_change'].cumsum()
     
     # 8. Filter to the user's requested view
-    view_start_dt = pd.to_datetime(view_start_date_str)
-    
     final_df = calendar_df[
-        (calendar_df['date'] >= view_start_dt)
+        (calendar_df['date'] >= pd.to_datetime(view_start_dt))
     ].copy()
     
     final_df['is_actual'] = final_df['is_actual'].astype(bool)

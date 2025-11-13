@@ -104,34 +104,8 @@ def format_calendar_item(row):
         }
     }
 
-# --- 5. DATA LOADING & PROJECTION ---
-# This is the core logic that runs on every interaction
-try:
-    # 1. Run the projection engine to create future transactions
-    # We'll project 2 years into the future
-    projection_end_date = (datetime.today() + relativedelta(years=2)).isoformat()
-    engine.run_projection(conn, USER_ID, projection_end_date)
-    
-    # 2. Get the calculated data for the calendar's current view
-    calendar_df = engine.get_calendar_data(
-        conn,
-        USER_ID,
-        st.session_state.calendar_view_start,
-        st.session_state.calendar_view_end
-    )
-    
-    if calendar_df.empty:
-        calendar_items = []
-    else:
-        # 3. Format the data for the calendar component
-        calendar_items = calendar_df.apply(format_calendar_item, axis=1).tolist()
-        
-except Exception as e:
-    st.error(f"Error running financial engine: {e}")
-    st.stop()
-
-
-# --- 6. MAIN PAGE UI ---
+# --- 5. MAIN PAGE UI & CALENDAR RENDERING ---
+# We render the calendar FIRST to get its callbacks.
 st.title(APP_TITLE)
 st.markdown(f"Welcome, **{user_email}**. This calendar shows your projected daily balance.")
 
@@ -165,15 +139,17 @@ calendar_options = {
 }
 
 cal = calendar(
-    events=calendar_items,
+    events=[], # We load events AFTER handling callbacks
     options=calendar_options,
     callbacks=["dateClick", "datesSet"], # datesSet is for month navigation
     key="financial_calendar"
 )
 
-# --- Handle Calendar Callbacks ---
-# *** THIS IS THE FIX ***
-# We split the ISO datetime string at the 'T' to get just the date
+# --- 6. HANDLE CALLBACKS (FIX) ---
+# This block now runs *before* the engine.
+# We check for a callback, update the state, and force a rerun.
+# On the rerun, the state is correct and the `if` block is skipped.
+
 if cal and cal.get('callback') == 'dateClick':
     date_str = cal.get('dateClick')['date'].split('T')[0]
     st.session_state.selected_day = date_str
@@ -182,12 +158,47 @@ if cal and cal.get('callback') == 'dateClick':
 if cal and cal.get('callback') == 'datesSet':
     start_str = cal.get('datesSet')['start'].split('T')[0]
     end_str = cal.get('datesSet')['end'].split('T')[0]
-    st.session_state.calendar_view_start = start_str
-    st.session_state.calendar_view_end = end_str
-    st.rerun()
+    
+    # Only rerun if the dates have actually changed
+    if (st.session_state.calendar_view_start != start_str or 
+        st.session_state.calendar_view_end != end_str):
+        st.session_state.calendar_view_start = start_str
+        st.session_state.calendar_view_end = end_str
+        st.rerun()
+
+# --- 7. DATA LOADING & PROJECTION ---
+# This now runs *after* callbacks are processed.
+calendar_items = []
+try:
+    # --- YOUR REQUESTED LOGGING ---
+    st.info(f"DEBUG: Calling engine with start: `{st.session_state.calendar_view_start}` and end: `{st.session_state.calendar_view_end}`")
+    
+    # 1. Run the projection engine to create future transactions
+    projection_end_date = (datetime.today() + relativedelta(years=2)).isoformat()
+    engine.run_projection(conn, USER_ID, projection_end_date)
+    
+    # 2. Get the calculated data for the calendar's current view
+    calendar_df = engine.get_calendar_data(
+        conn,
+        USER_ID,
+        st.session_state.calendar_view_start,
+        st.session_state.calendar_view_end
+    )
+    
+    if not calendar_df.empty:
+        # 3. Format the data for the calendar component
+        calendar_items = calendar_df.apply(format_calendar_item, axis=1).tolist()
+        
+    # 4. Update the calendar with the loaded events
+    cal.set_events(calendar_items)
+        
+except Exception as e:
+    st.error(f"Error running financial engine: {e}")
+    # Don't stop, just show an empty calendar
+    calendar_df = pd.DataFrame() # Create empty df to prevent other errors
 
 
-# --- 7. "DAY VIEW" DIALOG (Pop-up) ---
+# --- 8. "DAY VIEW" DIALOG (Pop-up) ---
 if st.session_state.selected_day:
     @st.dialog("Day View", on_dismiss=lambda: st.session_state.pop("selected_day", None))
     def day_view_dialog():
@@ -195,13 +206,22 @@ if st.session_state.selected_day:
         day = datetime.strptime(day_str, "%Y-%m-%d").date()
         
         # Get data for the selected day
+        if calendar_df.empty:
+             st.error("Calendar data is not loaded.")
+             return
+             
         day_row = calendar_df[calendar_df['date'].dt.date == day]
         
         if day_row.empty:
-            st.error("Could not find data for this day.")
-            return
-
-        day_data = day_row.iloc[0]
+            # This can happen if the user clicks a day outside the range
+            # Let's try to get *just* that day's data
+            temp_df = engine.get_calendar_data(conn, USER_ID, day_str, day_str)
+            if temp_df.empty:
+                st.error("Could not find data for this day.")
+                return
+            day_data = temp_df.iloc[0]
+        else:
+            day_data = day_row.iloc[0]
         
         st.header(f"Details for {day.strftime('%A, %B %d, %Y')}")
         
@@ -254,7 +274,7 @@ if st.session_state.selected_day:
 
     day_view_dialog()
 
-# --- 8. "ADD NEW TRANSACTION" DIALOG (Pop-up) ---
+# --- 9. "ADD NEW TRANSACTION" DIALOG (Pop-up) ---
 if "add_tx_date" in st.session_state:
     @st.dialog("Add New Transaction")
     def add_transaction_dialog():
@@ -333,7 +353,7 @@ if "add_tx_date" in st.session_state:
 
     add_transaction_dialog()
 
-# --- 9. SIDEBAR: Settings & Category Management ---
+# --- 10. SIDEBAR: Settings & Category Management ---
 with st.sidebar:
     st.header("Settings")
     
