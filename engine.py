@@ -13,28 +13,36 @@ def run_projection(conn, user_id, projection_end_date_str):
     projection_end_date = datetime.strptime(projection_end_date_str, "%Y-%m-%d").date()
     
     for schedule in schedules:
-        schedule_id, _, category_id, description, amount, frequency, start_date_str, end_date_str = schedule[:8]
-        
+        # Unpack all relevant fields from the tuple
+        schedule_id = schedule[0]
+        category_id = schedule[2]
+        description = schedule[3]
+        amount = schedule[4]
+        frequency = schedule[5]
+        start_date_str = schedule[6]
+        end_date_str = schedule[7]
+
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
         
         # Find the last date this was generated, or use the start date
         last_gen_date_str = database.get_last_generated_date(conn, user_id, schedule_id)
+        
         current_date = start_date
         if last_gen_date_str:
-            current_date = datetime.strptime(last_gen_date_str, "%Y-%m-%d").date()
+            # If it has been generated before, start from the *next* scheduled date
+            last_gen_date = datetime.strptime(last_gen_date_str, "%Y-%m-%d").date()
+            current_date = last_gen_date
+            if frequency == 'daily':
+                current_date += relativedelta(days=1)
+            elif frequency == 'weekly':
+                current_date += relativedelta(weeks=1)
+            elif frequency == 'bi-weekly':
+                current_date += relativedelta(weeks=2)
+            elif frequency == 'monthly':
+                current_date += relativedelta(months=1)
+            elif frequency == 'bi-monthly':
+                current_date += relativedelta(months=2) # Assuming every 2 months
         
-        # Move to the *next* scheduled date
-        if frequency == 'daily':
-            current_date += relativedelta(days=1)
-        elif frequency == 'weekly':
-            current_date += relativedelta(weeks=1)
-        elif frequency == 'bi-weekly':
-            current_date += relativedelta(weeks=2)
-        elif frequency == 'monthly':
-            current_date += relativedelta(months=1)
-        elif frequency == 'bi-monthly':
-            current_date += relativedelta(months=2) # Assuming every 2 months
-            
         # Set the loop's end date
         loop_end_date = projection_end_date
         if end_date_str:
@@ -67,6 +75,8 @@ def run_projection(conn, user_id, projection_end_date_str):
                 current_date += relativedelta(months=1)
             elif frequency == 'bi-monthly':
                 current_date += relativedelta(months=2) # Assuming every 2 months
+            else:
+                break # Failsafe for unknown frequency
 
 def get_calendar_data(conn, user_id, view_start_date_str, view_end_date_str):
     """
@@ -77,22 +87,30 @@ def get_calendar_data(conn, user_id, view_start_date_str, view_end_date_str):
         return pd.DataFrame() # No settings, return empty
 
     start_balance = settings['start_balance']
-    start_date = settings['start_date']
-
+    start_date_str = settings['start_date']
+    start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    
     # 1. Get ALL transactions from the user's global start date
-    all_transactions = database.get_all_transactions_after(conn, user_id, start_date)
+    all_transactions = database.get_all_transactions_after(conn, user_id, start_date_str)
+    
+    # 2. Create a full date range for the calendar
+    view_end_dt = datetime.strptime(view_end_date_str, "%Y-%m-%d").date()
+    full_date_range = pd.date_range(start=start_date, end=view_end_dt, freq='D')
+    calendar_df = pd.DataFrame(index=full_date_range).reset_index().rename(columns={'index': 'date'})
     
     if not all_transactions:
         # No transactions at all, just return a range of dates with the start balance
-        date_range = pd.date_range(start=view_start_date_str, end=view_end_date_str, freq='D')
-        df = pd.DataFrame(index=date_range)
-        df['balance'] = start_balance
-        df['credits'] = 0.0
-        df['debits'] = 0.0
-        df['is_actual'] = True # No transactions, so the balance is "actual"
-        return df.reset_index().rename(columns={'index': 'date'})
+        calendar_df['balance'] = start_balance
+        calendar_df['credits'] = 0.0
+        calendar_df['debits'] = 0.0
+        calendar_df['is_actual'] = True # No transactions, so the balance is "actual"
+        
+        # Filter to the requested view
+        view_start_dt = pd.to_datetime(view_start_date_str)
+        final_df = calendar_df[calendar_df['date'] >= view_start_dt].copy()
+        return final_df
 
-    # 2. Convert to DataFrame
+    # 3. Convert transactions to DataFrame
     df = pd.DataFrame(all_transactions, columns=[
         'transaction_id', 'user_id', 'schedule_id', 'category_id', 
         'date', 'description', 'amount', 'is_confirmed', 'category_name', 'category_type'
@@ -100,40 +118,33 @@ def get_calendar_data(conn, user_id, view_start_date_str, view_end_date_str):
     df['date'] = pd.to_datetime(df['date'])
     df['amount'] = pd.to_numeric(df['amount'])
     
-    # 3. Separate credits and debits
+    # 4. Separate credits and debits
     df['credits'] = df.apply(lambda row: row['amount'] if row['amount'] > 0 else 0, axis=1)
     df['debits'] = df.apply(lambda row: row['amount'] if row['amount'] <= 0 else 0, axis=1)
 
-    # 4. Group by day
+    # 5. Group by day
     daily_summary = df.groupby(pd.Grouper(key='date', freq='D')).agg(
         credits=('credits', 'sum'),
         debits=('debits', 'sum'),
-        is_actual=('is_confirmed', lambda x: (x == 1).all()) # All transactions must be confirmed
+        is_actual=('is_confirmed', lambda x: (x == 1).all() or x.empty) # All must be confirmed
     ).reset_index()
     
     daily_summary['net_change'] = daily_summary['credits'] + daily_summary['debits']
-    
-    # 5. Create a full date range from the user's start date
-    full_date_range = pd.date_range(start=start_date, end=view_end_date_str, freq='D')
-    calendar_df = pd.DataFrame(index=full_date_range).reset_index().rename(columns={'index': 'date'})
     
     # 6. Merge daily transactions onto the full calendar
     calendar_df = pd.merge(calendar_df, daily_summary, on='date', how='left').fillna(0)
     
     # 7. Calculate the running balance
+    # We must back-fill the balance for dates *before* the first transaction
     calendar_df['balance'] = start_balance + calendar_df['net_change'].cumsum()
     
     # 8. Filter to the user's requested view
     view_start_dt = pd.to_datetime(view_start_date_str)
-    view_end_dt = pd.to_datetime(view_end_date_str)
     
     final_df = calendar_df[
-        (calendar_df['date'] >= view_start_dt) & 
-        (calendar_df['date'] <= view_end_dt)
+        (calendar_df['date'] >= view_start_dt)
     ].copy()
     
     final_df['is_actual'] = final_df['is_actual'].astype(bool)
     
     return final_df
-
-print(f"File {REPO_PATH}/engine.py written successfully.")

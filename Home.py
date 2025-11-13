@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from streamlit_calendar import calendar
+import time
 
 # Import our custom backend modules
 import database
@@ -21,6 +22,8 @@ st.set_page_config(
 # This is the "front door" of the app.
 # It checks if the user is logged in via Streamlit's Google OAuth.
 try:
+    # st.user.email is automatically populated by Streamlit Cloud
+    # when the app is set to "Private"
     user_email = st.user.email
 except AttributeError:
     # This happens in local dev, so we'll use a placeholder.
@@ -149,26 +152,39 @@ with st.container():
         st.markdown(f"<span style='color: #D32F2F;'>{format_currency(-123.45)}</span>: Total Debits", unsafe_allow_html=True)
 
 # --- The Calendar Component ---
-calendar(
-    events=calendar_items,
-    options={
-        "headerToolbar": {
-            "left": "prev,next today",
-            "center": "title",
-            "right": "dayGridMonth,timeGridWeek,timeGridDay"
-        },
-        "initialDate": datetime.today().isoformat(),
-        "initialView": "dayGridMonth",
-        "selectable": True,
-        "editable": False,
-        "dayMaxEvents": True, # Allows scrolling for many events
-        "eventContent": {
-            "html": True # IMPORTANT: Allows us to use custom HTML for the title
-        }
+calendar_options = {
+    "headerToolbar": {
+        "left": "prev,next today",
+        "center": "title",
+        "right": "dayGridMonth,timeGridWeek,timeGridDay"
     },
+    "initialDate": datetime.today().isoformat(),
+    "initialView": "dayGridMonth",
+    "selectable": True,
+    "editable": False,
+    "dayMaxEvents": True, # Allows scrolling for many events
+    "eventContent": {
+        "html": True # IMPORTANT: Allows us to use custom HTML for the title
+    }
+}
+
+cal = calendar(
+    events=calendar_items,
+    options=calendar_options,
     callbacks=["dateClick", "datesSet"], # datesSet is for month navigation
     key="financial_calendar"
 )
+
+# --- Handle Calendar Callbacks ---
+if cal.get('callback') == 'dateClick':
+    st.session_state.selected_day = cal.get('dateClick')['date']
+    st.rerun()
+
+if cal.get('callback') == 'datesSet':
+    st.session_state.calendar_view_start = cal.get('datesSet')['start']
+    st.session_state.calendar_view_end = cal.get('datesSet')['end']
+    st.rerun()
+
 
 # --- 7. "DAY VIEW" DIALOG (Pop-up) ---
 if st.session_state.selected_day:
@@ -178,7 +194,13 @@ if st.session_state.selected_day:
         day = datetime.strptime(day_str, "%Y-%m-%d").date()
         
         # Get data for the selected day
-        day_data = calendar_df[calendar_df['date'].dt.date == day].iloc[0]
+        day_row = calendar_df[calendar_df['date'].dt.date == day]
+        
+        if day_row.empty:
+            st.error("Could not find data for this day.")
+            return
+
+        day_data = day_row.iloc[0]
         
         st.header(f"Details for {day.strftime('%A, %B %d, %Y')}")
         
@@ -219,12 +241,14 @@ if st.session_state.selected_day:
                     # Delete Button
                     if col3.button("Delete", key=f"del_{tx_id}", use_container_width=True):
                         database.delete_transaction(conn, tx_id, USER_ID)
+                        st.session_state.pop("selected_day", None) # Close dialog
                         st.rerun()
         
         # --- Add New Transaction Button ---
         st.divider()
         if st.button("Add New Transaction...", use_container_width=True):
             st.session_state.add_tx_date = day # Pre-fill date
+            st.session_state.pop("selected_day", None) # Close this dialog
             st.rerun()
 
     day_view_dialog()
@@ -293,6 +317,7 @@ if "add_tx_date" in st.session_state:
                     
                     # Clear state and close dialog
                     st.session_state.pop("add_tx_date", None)
+                    time.sleep(1) # Give user time to read success message
                     st.rerun()
                     
                 except Exception as e:
@@ -331,8 +356,11 @@ with st.sidebar:
             col1, col2 = st.columns([3, 1])
             col1.write(f"{name} ({type})")
             if col2.button("X", key=f"del_cat_{cat_id}", help=f"Delete {name}"):
-                database.delete_category(conn, cat_id, USER_ID)
-                st.rerun()
+                try:
+                    database.delete_category(conn, cat_id, USER_ID)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not delete. This category is in use by a scheduled transaction. Error: {e}")
     
     with st.form("add_category_form", clear_on_submit=True):
         st.write("Add New Category")
@@ -345,5 +373,3 @@ with st.sidebar:
                 st.rerun()
             else:
                 st.error("Category name cannot be empty.")
-
-print(f"File {REPO_PATH}/Home.py written successfully.")

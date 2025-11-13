@@ -9,6 +9,7 @@ def create_connection():
     """Create a database connection to the SQLite database."""
     conn = None
     try:
+        # The database will be created in the root of the repo
         conn = sqlite3.connect(DATABASE_NAME, check_same_thread=False)
         conn.execute("PRAGMA foreign_keys = ON;") # Enforce foreign key constraints
     except Error as e:
@@ -64,7 +65,7 @@ def create_tables(conn):
             start_date TEXT NOT NULL,
             end_date TEXT,
             FOREIGN KEY (user_id) REFERENCES users (user_id),
-            FOREIGN KEY (category_id) REFERENCES categories (category_id)
+            FOREIGN KEY (category_id) REFERENCES categories (category_id) ON DELETE SET NULL
         );
         """)
 
@@ -81,8 +82,8 @@ def create_tables(conn):
             amount REAL NOT NULL,
             is_confirmed INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (user_id) REFERENCES users (user_id),
-            FOREIGN KEY (schedule_id) REFERENCES scheduled_transactions (schedule_id),
-            FOREIGN KEY (category_id) REFERENCES categories (category_id)
+            FOREIGN KEY (schedule_id) REFERENCES scheduled_transactions (schedule_id) ON DELETE SET NULL,
+            FOREIGN KEY (category_id) REFERENCES categories (category_id) ON DELETE SET NULL
         );
         """)
         
@@ -153,9 +154,7 @@ def add_category(conn, user_id, name, type):
 
 def delete_category(conn, category_id, user_id):
     c = conn.cursor()
-    # We must set transactions to null, not delete them
-    c.execute("UPDATE transactions SET category_id = NULL WHERE category_id = ? AND user_id = ?", (category_id, user_id))
-    c.execute("UPDATE scheduled_transactions SET category_id = NULL WHERE category_id = ? AND user_id = ?", (category_id, user_id))
+    # On delete, set foreign keys to NULL instead of deleting transactions
     c.execute("DELETE FROM categories WHERE category_id = ? AND user_id = ?", (category_id, user_id))
     conn.commit()
 
@@ -267,5 +266,3 @@ def update_user_settings(conn, user_id, start_balance, start_date):
     WHERE user_id = ?
     """, (start_balance, start_date, user_id))
     conn.commit()
-
-print(f"File {REPO_PATH}/database.py written successfully.")
